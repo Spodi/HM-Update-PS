@@ -396,3 +396,16 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+soh.exe
+gamecontrollerdb.txt
+soh.otr
+update.zip
+readme.txt
+Save/
+assets/
+mods/
+UpBackup/
+Update/
+HM-UpdateConfig.json
+GitHub_RateLimits.json
