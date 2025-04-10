@@ -1,9 +1,43 @@
+<#
+.DESCRIPTION
+PowerShell script to update HaborMasters ports.
+Gets update data and updtates the port in the scripts current working directory.
+
+.NOTES
+HaborMasters Update - PowerShell Script v25.04.10
+    
+    MIT License
+
+    Copyright (C) 2025 Spodi
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+#>
+
 [CmdletBinding(DefaultParameterSetName = 'none')]
 param (
-    # This will force the update, regardless of your current version.
+    # This will force an update, regardless of your current version.
     [Parameter(ParameterSetName = 'force')][switch]$forceUpdate,
+    # This will update to the latest nightly version. Implies "-forceUpdate".
+    [Parameter(ParameterSetName = 'force')][switch]$nightly,
     # Use update data for the selected game, no matter what is actually detected. Implies "-forceUpdate". This can corrupt your game!
     [Parameter(ParameterSetName = 'force')][ValidateSet('Ship of Harkinian', '2 Ship 2 Harkinian', 'Starship')][string]$forceGame
+    
 )
 
 function CopyAndBackup {
@@ -212,62 +246,89 @@ Write-Host "Local Version:  $($GameInfo.ProductVersion)"
 
 $lookup = @{
     'Ship of Harkinian'  = @{
-        Owner = 'HarbourMasters'
-        Repo  = 'Shipwright'
+        Owner   = 'HarbourMasters'
+        Repo    = 'Shipwright'
+        Nightly = 'https://nightly.link/HarbourMasters/Shipwright/workflows/generate-builds/develop/soh-windows.zip'
     }
     '2 Ship 2 Harkinian' = @{
-        Owner = 'HarbourMasters'
-        Repo  = '2ship2harkinian'
+        Owner   = 'HarbourMasters'
+        Repo    = '2ship2harkinian'
+        Nightly = 'https://nightly.link/HarbourMasters/2ship2harkinian/workflows/main/develop/2ship-windows.zip'
     }
     'Starship'           = @{
-        Owner = 'HarbourMasters'
-        Repo  = 'Starship'
+        Owner   = 'HarbourMasters'
+        Repo    = 'Starship'
+        Nightly = 'https://nightly.link/HarbourMasters/Starship/workflows/main/main/starship-windows.zip'
     } 
 }
 
-$ReleaseInfo = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $lookup[$GameInfo.ProductName].Owner + '/' + $lookup[$GameInfo.ProductName].Repo + '/releases/latest')
-
-if (!$ReleaseInfo) {
-    Write-Error 'Could not get required information from GitHub.'
-    Exit 1
+if ($nightly) {
+    $RemoteVersion = 'Nightly'
+    $Download = [PSCustomObject]@{
+        URL = $lookup[$GameInfo.ProductName].Nightly
+    }
 }
+else {
+    $ReleaseInfo = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $lookup[$GameInfo.ProductName].Owner + '/' + $lookup[$GameInfo.ProductName].Repo + '/releases/latest')
 
-# Try to convert into a Version number
-
-$RemoteVersion = $ReleaseInfo.tag_name
-$Download = $ReleaseInfo.Assets | & { Process {
-        if ($_.name -match 'Win64' -or $_.name -match 'Windows') {
-            [PSCustomObject]@{
-                Name = $_.name
-                URL  = $_.browser_download_url
-            }           
-        }
-
-    } }
-
-
-
-$RemoteVersion = [version]$RemoteVersion
-
+    if (!$ReleaseInfo) {
+        Write-Error 'Could not get required information from GitHub.'
+        Exit 1
+    }
+    
+    # Try to convert into a Version number
+    
+    $RemoteVersion = $ReleaseInfo.tag_name
+    $Download = $ReleaseInfo.Assets | & { Process {
+            if ($_.name -match 'Win64' -or $_.name -match 'Windows') {
+                [PSCustomObject]@{
+                    URL = $_.browser_download_url
+                }
+            }
+    
+        } }
+    
+    
+    
+    $RemoteVersion = [version]$RemoteVersion
+}
 Write-Host "Remote Version: $($RemoteVersion)"
 Write-Host ''
 $OngoingRando = $null
 $save = $null
 
-if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGame) {
+if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGame -or $nightly) {
     Write-Host 'There is a newer version available!' -ForegroundColor 'Blue'
     Write-Host "Download URL: $($Download.URL)"
     for ($i = 1; $i -le 3; $i++) {
-        $save = Get-Content "Save\file$i.sav" | ConvertFrom-Json
-        if ($save.sections.base.data.n64ddFlag -and !$save.sections.sohStats.data.gameComplete) {
-            $OngoingRando = $true
-            break;
+        if (Test-Path -Path "Save\file$i.sav" -PathType 'Leaf') {
+            $save = Get-Content "Save\file$i.sav" | ConvertFrom-Json
+            if ($save.sections.base.data.n64ddFlag -and !$save.sections.sohStats.data.gameComplete) {
+                $OngoingRando = "file$i.sav"
+                break;
+            }
+        }
+        elseif (Test-Path -Path "Save\file$i.json" -PathType 'Leaf') {
+            $save = Get-Content "Save\file$i.json" | ConvertFrom-Json
+            if ($save.owlSave) {
+                if ((($save.owlSave.save.shipSaveInfo.saveType -eq 1) -and ($save.owlSave.save.shipSaveInfo.fileCompletedAt -eq 0))) {
+                    $OngoingRando = "file$i.json"
+                    break;
+                }
+            }
+            else {
+                if ((($save.newCycleSave.save.shipSaveInfo.saveType -eq 1) -and ($save.newCycleSave.save.shipSaveInfo.fileCompletedAt -eq 0))) {
+                    $OngoingRando = "file$i.json"
+                    break;
+                }
+            
+            }
         }
     }
 
     Write-Host 'Updating overwrites your current version!' -ForegroundColor 'yellow'
     if ($OngoingRando) {
-        Write-Host 'WARNING: Ongoing Randomizer save detected!' -ForegroundColor 'red'
+        Write-Host "WARNING: Ongoing Randomizer save detected! ($OngoingRando)" -ForegroundColor 'red'
         Write-Host 'Updating will most likely break your Randomizer save!' -ForegroundColor 'red'
     }
     Write-Host 'Do you want to download and install? (y/n)' -NoNewline
