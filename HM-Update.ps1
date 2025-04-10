@@ -63,7 +63,7 @@ function CopyAndBackup {
             if (-not (Test-Path -LiteralPath $newDestination -PathType Container)) { [void](New-Item $newDestination -Type Directory) }
             elseif (-not (Test-Path -LiteralPath $newBackupPath -PathType Container)) { [void](New-Item $newBackupPath -Type Directory) }
 			
-            CustomCopy $newPath $newDestination $root $newBackupPath
+            CopyAndBackup $newPath $newDestination $root $newBackupPath
 			
 			
         }
@@ -77,7 +77,7 @@ function CopyAndBackup {
                 Copy-Item -LiteralPath $_.FullName $destItem -Force
                 $workingDir = Get-Location
                 Set-Location $root
-				(Get-Item -LiteralPath $destItem | Resolve-Path -Relative)
+                #(Get-Item -LiteralPath $destItem | Resolve-Path -Relative)
                 Set-Location $workingDir
             }
 			
@@ -397,10 +397,24 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
                 Write-Host 'Someting went wrong. But you can manually restore previous files from "UpBackup" directory until you start another update.'
                 Exit 2
             }
+            $now = [DateTimeOffset]::('now').ToLocalTime().toString('yyyyMMdd_HHmmss')
+            Write-Host 'Compressing Backup ... ' -NoNewline
+            try {
+                Compress-Archive "UpBackup\*" "Backup_$now.zip" -ErrorAction Stop
+                Remove-Item -Recurse -Force 'UpBackup\'
+                Write-Host 'Done!' -ForegroundColor 'Green'
+            }
+            catch {
+                Write-Host 'Error!' -ForegroundColor 'Red' 
+                Write-Error $_
+                Write-Host 'Someting went wrong while packing a backup. But you can still restore previous files from "UpBackup" directory until you start another update.'
+            }
+
             if (Test-Path 'update' -PathType Container) {
                 Remove-Item -Recurse -Force 'update\'
             }
-            Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from the `"UpBackup`" directory until you start another update."
+            Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from `"Backup_$now.zip`"."
+            Write-Host 'Depending on the update you might need to manually regenerate your OTR/O2R!' -ForegroundColor 'Yellow' 
         }
         $ProgressPreference = $prevProg
 
