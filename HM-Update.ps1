@@ -1,10 +1,10 @@
 <#
 .DESCRIPTION
-PowerShell script to update HaborMasters ports.
+PowerShell script to update Harbour Masters ports.
 Gets update data and updtates the port in the scripts current working directory.
 
 .NOTES
-HaborMasters Update - PowerShell Script v25.04.10
+Harbour Masters Update - PowerShell Script v25.04.10
     
     MIT License
 
