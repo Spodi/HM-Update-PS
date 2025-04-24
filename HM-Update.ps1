@@ -648,11 +648,20 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             Write-Host 'Compressing Backup ... ' -NoNewline
             try {
                 if (Get-7zip) {
-                    Compress-7z -Path '.\HM-Update\UpBackup\*.pdb' -ArchivePath "HM-Update\Backup_$now.7z" -type 'Fast' -ErrorAction Stop # Use fast compression for .pdb or this takes ages
-                    Compress-7z -Path '.\HM-Update\UpBackup\*' -ArchivePath "HM-Update\Backup_$now.7z" -ErrorAction Stop
+                    @(
+                        [PSCustomObject]@{
+                            # Use fast compression for .pdb or this takes ages.
+                            Path        = '.\HM-Update\UpBackup\*.pdb'
+                            Type        = 'Fast'
+                        },
+                        # Use default (binary) for everything else.
+                        '.\HM-Update\UpBackup\*'
+                    ) | Compress-7z -ArchivePath "HM-Update\Backup_$now.7z" -ProgressAction 'Continue' -ErrorAction Stop
+                    $ext = "7z"
                 }
                 else {
                     Compress-Archive '.\HM-Update\UpBackup\*' "HM-Update\Backup_$now.zip" -ErrorAction Stop
+                    $ext = "zip"
                 }
                 Remove-Item -Recurse -Force 'HM-Update\UpBackup\'
                 Write-Host 'Done!' -ForegroundColor 'Green'
@@ -667,7 +676,7 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             if (Test-Path 'HM-Update\update' -PathType Container) {
                 Remove-Item -Recurse -Force 'HM-Update\update\'
             }
-            Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from `"HM-Update\Backup_$now.zip/.7z`"."
+            Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from `"HM-Update\Backup_$now.$ext`"."
             Write-Host 'Depending on the update you might need to manually regenerate your OTR/O2R!' -ForegroundColor 'Yellow' 
         }
         $ProgressPreference = $prevProg
