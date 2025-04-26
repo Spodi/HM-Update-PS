@@ -11,7 +11,7 @@ Exit Codes:
 3 - Failed to pack backup. Update was successful, but packed backup is incomplete. Manually save files from the "UpBackup" folder before next update.
 
 
-Harbour Masters Update - PowerShell Script v25.04.10
+Harbour Masters Update - PowerShell Script v25.04.26
     
     MIT License
 
@@ -36,23 +36,35 @@ Harbour Masters Update - PowerShell Script v25.04.10
     SOFTWARE.
 #>
 
-[CmdletBinding(DefaultParameterSetName = 'none')]
+[CmdletBinding(DefaultParameterSetName = 'Default')]
 param (
-    # This will force an update, regardless of your current version.
-    [Parameter(ParameterSetName = 'force')][switch]$forceUpdate,
+    # Automatically starts the game after this script finishes. Except on errors.
+    [Parameter(ParameterSetName = 'Default')] [switch]$Autostart,
+
     <#
-    This will force an update to the latest nightly version.
-    Implies "-forceUpdate".
+    Force an update to the latest nightly version.
+    Implies "-ForceUpdate" and "-SkipCheckTimer".
     #>
-    [Parameter(ParameterSetName = 'force')][switch]$nightly,
+    [Parameter(ParameterSetName = 'Default')] [switch]$Nightly,
+
+    # Check for updates more often than once per hour.
+    [Parameter(ParameterSetName = 'Default')] [switch]$SkipCheckTimer,
+
     <#
-    Use update data for the selected game, no matter what is actually detected. Can be used to simply download and extract any of the ports.
-    Implies "-forceUpdate".
+    Force an update, regardless of your current version.
+    Implies "-SkipCheckTimer".
+    #>
+    [Parameter(ParameterSetName = 'Default')] [switch]$ForceUpdate,
+
+    <#
+    Use update data for the selected game and force an update, no matter what is actually detected. Can be used to simply download and extract any of the ports.
+    Implies "-ForceUpdate" and "-SkipCheckTimer".
     > [!CAUTION]
-    > -forceGame can corrupt your game if you select a different game than the one already installed!
+    > -ForceGame can corrupt your game if you select a different game than the one already installed!
     #>
-    [Parameter(ParameterSetName = 'force')][ValidateSet('Ship of Harkinian', '2 Ship 2 Harkinian', 'Starship')][string]$forceGame,
-    [Parameter(ParameterSetName = 'auto')][switch]$autostart
+    [Parameter(ParameterSetName = 'Default')] [string]$ForceGame
+
+
     
 )
 
@@ -421,42 +433,59 @@ function Invoke-GitHubRestRequest {
 
 #region Script
 class UpdateConfig {
-    [DateTimeOffset]$LastUpdate = [DateTimeOffset]::('now').AddHours(-1)
+    [DateTimeOffset]$LastCheck = [DateTimeOffset]::('now').AddHours(-1)
     [PSCustomObject]$GH_Rates
+}
+class GameEntry {
+    [String]$Name
+    [String]$Exe
+    [String]$Owner
+    [String]$Repo
+    [String]$Nightly
+    [String]$Config
+    [String[]]$Save
 }
 
 $exitCode = 0
 $UpdateConfig = [UpdateConfig]::new()
-if (Test-Path -LiteralPath 'HM-Update_config.json' -PathType Leaf) {
-    [UpdateConfig]$UpdateConfig = Get-Content 'HM-Update_config.json' | ConvertFrom-Json
+if (Test-Path -LiteralPath '.\HM-Update\config.json' -PathType Leaf) {
+    [UpdateConfig]$UpdateConfig = Get-Content '.\HM-Update\config.json' | ConvertFrom-Json
 }
 if (!(Test-Path 'HM-Update' -PathType Container)) {
     [void](New-Item -ItemType Directory 'HM-Update')
 }
+$GameSupport = @([GameEntry]::new())
+if (Test-Path -LiteralPath '.\HM-Update\GameSupport.json' -PathType Leaf) {
+    [GameEntry[]]$GameSupport = Get-Content '.\HM-Update\GameSupport.json' | ConvertFrom-Json
+}
 
 if ($forceGame) {
-    $GameInfo = [PSCustomObject]@{
-        ProductName       = $forceGame
-        ProductVersion    = '0.0.0'
-        ProductVersionRaw = [version]::new()
+    if ($GameSupport.Name -contains $forceGame) {
+        $GameInfo = [PSCustomObject]@{
+            ProductName       = $forceGame
+            ProductVersion    = '0.0.0'
+            ProductVersionRaw = [version]::new()
+        }
+    }
+    else {
+        $text = "`"$forceGame`" is not supported. Supported games: '$($GameSupport.Name -join "', '")'"
+        Throw $text
     }
    
 }
 else {
-    if (Test-Path -LiteralPath 'soh.exe' -PathType Leaf) {
-        $GameInfo = (Get-Item 'soh.exe').VersionInfo
+    foreach ($exe in $GameSupport.Exe) {
+        if (Test-Path -LiteralPath $exe -PathType Leaf) {
+            $GameInfo = (Get-Item $exe).VersionInfo
+            break;
+        }  
     }
-    elseif (Test-Path -LiteralPath '2ship.exe' -PathType Leaf) {
-        $GameInfo = (Get-Item '2ship.exe').VersionInfo
-    }
-    elseif (Test-Path -LiteralPath 'Starship.exe' -PathType Leaf) {
-        $GameInfo = (Get-Item 'Starship.exe').VersionInfo
-    }
-    else {
-        Write-Error "Could not find a compatible game! Try -forceGame <'Ship of Harkinian' | '2 Ship 2 Harkinian' | 'Starship'>"
+    if (!$GameInfo) {
+        Write-Error "Could not find a compatible game! Try -forceGame <'$($GameSupport.Name -join "' | '")'>"
         Exit 1
-    }
+    } 
 }
+
 if (!$GameInfo.ProductName -or !$GameInfo.ProductVersionRaw ) {
     Write-Error 'Could not read version data from game. Try -forceUpdate'
     Write-Host
@@ -470,40 +499,24 @@ else {
     $UpdateConfig | ConvertTo-Json | Out-File 'HM-Update\config.json'
 }
 
+$UpdateContext = $GameSupport | Where-Object 'Name' -EQ $GameInfo.ProductName
+
 Write-Host "Game:           $($GameInfo.ProductName)"
 Write-Host "Local Version:  $($GameInfo.ProductVersion)"
-#region Lookup Table
-$lookup = [PSCustomObject]@{
-    'Ship of Harkinian'  = @{
-        Owner   = 'HarbourMasters'
-        Repo    = 'Shipwright'
-        Nightly = 'https://nightly.link/HarbourMasters/Shipwright/workflows/generate-builds/develop/soh-windows.zip'
-        Config  = 'shipofharkinian.json'
-    }
-    '2 Ship 2 Harkinian' = @{
-        Owner   = 'HarbourMasters'
-        Repo    = '2ship2harkinian'
-        Nightly = 'https://nightly.link/HarbourMasters/2ship2harkinian/workflows/main/develop/2ship-windows.zip'
-        Config  = '2ship2harkinian.json'
-    }
-    'Starship'           = @{
-        Owner   = 'HarbourMasters'
-        Repo    = 'Starship'
-        Nightly = 'https://nightly.link/HarbourMasters/Starship/workflows/main/main/starship-windows.zip'
-        Config  = 'starship.cfg.json'
-    } 
-}
-#endregion Lookup Table
+
+$RemoteVersion = $null
+$now = [DateTimeOffset]::('now')
 if ($nightly) {
     $RemoteVersion = 'Nightly'
     $Download = [PSCustomObject]@{
-        URL = $lookup.($GameInfo.ProductName).Nightly
+        URL = $UpdateContext.Nightly
     }
 }
-else {
-    $Request = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $lookup.($GameInfo.ProductName).Owner + '/' + $lookup.($GameInfo.ProductName).Repo + '/releases/latest') -Rates $UpdateConfig.GH_Rates
+elseif (($now -gt $UpdateConfig.LastCheck.AddHours(1)) -or $forceUpdate -or $forceGame -or $SkipCheckTimer) {
+    $Request = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $UpdateContext.Owner + '/' + $UpdateContext.Repo + '/releases/latest') -Rates $UpdateConfig.GH_Rates
     $ReleaseInfo = $Request.Response
     $UpdateConfig.GH_Rates = $Request.GH_Rates
+    $UpdateConfig.LastCheck = $now
     $UpdateConfig | ConvertTo-Json | Out-File 'HM-Update\config.json'
 
     if (!$ReleaseInfo) {
@@ -527,48 +540,75 @@ else {
      
     $RemoteVersion = [version]($RemoteVersion -replace '^v ?', '')
 }
-Write-Host "Remote Version: $($RemoteVersion)"
+if ($RemoteVersion) {
+    Write-Host "Remote Version: $($RemoteVersion)"
+}
+else {
+    $RemoteVersion = $GameInfo.ProductVersionRaw
+    Write-Host 'Update check skipped. Last check was less than an hour ago. Use -SkipCheckTimer to try an update anyway.' -ForegroundColor 'yellow'
+}
 Write-Host ''
 
 #region Rando saves
-$OngoingRando = $null
 $save = $null
 if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGame -or $nightly) {
     Write-Host 'There is a newer version available!' -ForegroundColor 'Blue'
     Write-Host "Download URL: $($Download.URL)"
-    for ($i = 1; $i -le 3; $i++) {
-        # SoH
-        if (Test-Path -Path "Save\file$i.sav" -PathType 'Leaf') { 
-            $save = Get-Content "Save\file$i.sav" | ConvertFrom-Json
-            if ($save.sections.base.data.n64ddFlag -and !$save.sections.sohStats.data.gameComplete) {
-                $OngoingRando = "file$i.sav"
-                break;
-            }
-        }
-        # 2S2H
-        elseif (Test-Path -Path "Save\file$i.json" -PathType 'Leaf') {
-            $save = Get-Content "Save\file$i.json" | ConvertFrom-Json
-            if ($save.owlSave) {
-                if ((($save.owlSave.save.shipSaveInfo.saveType -eq 1) -and ($save.owlSave.save.shipSaveInfo.fileCompletedAt -eq 0))) {
-                    $OngoingRando = "file$i.json"
-                    break;
+
+    $IsRando = & { for ($i = 1; $i -le 3; $i++) {
+            # SoH
+            if (Test-Path -Path ".\Save\file$i.sav" -PathType 'Leaf') { 
+                $save = Get-Content ".\Save\file$i.sav" | ConvertFrom-Json
+                if ($save.sections.base.data.n64ddFlag) {
+                    if ($save.sections.sohStats.data.gameComplete) {
+                        Write-Output ([PSCustomObject]@{
+                                Name      = ".\Save\file$i.sav"
+                                Completed = $true
+                            })
+                    }
+                    else {
+                        Write-Output ([PSCustomObject]@{
+                                Name      = ".\Save\file$i.sav"
+                                Completed = $false
+                            })
+                    }
+                
                 }
             }
-            else {
-                if ((($save.newCycleSave.save.shipSaveInfo.saveType -eq 1) -and ($save.newCycleSave.save.shipSaveInfo.fileCompletedAt -eq 0))) {
-                    $OngoingRando = "file$i.json"
-                    break;
+            # 2S2H
+            elseif (Test-Path -Path ".\Save\file$i.json" -PathType 'Leaf') {
+                $save = Get-Content ".\Save\file$i.json" | ConvertFrom-Json
+                if ($save.owlSave) {
+                    $saveType = 'owlSave'
                 }
-            
+                else {
+                    $saveType = 'newCycleSave'
+                }
+                if ((($save.$saveType.save.shipSaveInfo.saveType -eq 1))) {
+                    if ($save.$saveType.save.shipSaveInfo.fileCompletedAt -eq 0) {
+                        Write-Output ([PSCustomObject]@{
+                                Name      = ".\Save\file$i.json"
+                                Completed = $true
+                            })
+                    }
+                    else {
+                        Write-Output ([PSCustomObject]@{
+                                Name      = ".\Save\file$i.json"
+                                Completed = $false
+                            })
+                    }
+                }
             }
         }
     }
     #endregion Rando saves
 
-    Write-Host 'Updating overwrites your current version!' -ForegroundColor 'yellow'
-    if ($OngoingRando) {
-        Write-Host "WARNING: Ongoing Randomizer save detected! ($OngoingRando)" -ForegroundColor 'red'
-        Write-Host 'Updating will most likely break your Randomizer save!' -ForegroundColor 'red'
+    Write-Host 'Updating overwrites your current version, but there will be a backup (including saves and settings).' -ForegroundColor 'DarkYellow'
+    if ($IsRando) {
+        Write-Host 'WARNING: Randomizer save detected:' -ForegroundColor 'yellow'
+        Write-Host (($IsRando | Format-Table | Out-String).Trim())
+        Write-Host 'Updating will most likely break your Randomizer save!' -ForegroundColor 'yellow'
+        Write-Host 'In some cases the game will crash at startup until those saves are deleted!' -ForegroundColor 'red'
     }
     Write-Host 'Do you want to download and install? (y/n)' -NoNewline
     do {
@@ -595,7 +635,7 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
                 Write-Host 'Removing old update directory.'
                 Remove-Item -Recurse -Force 'HM-Update\update\'
             }
-            Write-Host "Unpacking `"HM-Update\update.zip`"... " -NoNewline
+            Write-Host "Unpacking `".\HM-Update\update.zip`"... " -NoNewline
             try {
                 if (Get-7zip) {
                     Expand-7z -ArchivePath 'HM-Update\update.zip' -DestinationPath 'HM-Update\update\' -ErrorAction Stop
@@ -621,11 +661,13 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             Write-Host 'Updating. Do not abort! ... ' -NoNewline
             try {
                 [void](New-Item -ItemType Directory 'HM-Update\UpBackup')
-                if (Test-Path -LiteralPath 'Save' -PathType 'Container') {
-                    Copy-Item -LiteralPath 'Save\' -Destination 'HM-Update\UpBackup\' -Recurse -ErrorAction Stop
+                foreach ($save in $UpdateContext.Save) {
+                    if (Test-Path -LiteralPath $save) {
+                        Copy-Item -LiteralPath $save -Destination 'HM-Update\UpBackup\' -Recurse -ErrorAction Stop
+                    }
                 }
-                if (Test-Path -LiteralPath 'default.sav' -PathType 'Leaf') {
-                    Copy-Item -LiteralPath 'default.sav' -Destination 'HM-Update\UpBackup\' -ErrorAction Stop
+                if (Test-Path -LiteralPath $UpdateContext.Config -PathType 'Leaf') {
+                    Copy-Item -LiteralPath $UpdateContext.Config -Destination 'HM-Update\UpBackup\' -ErrorAction Stop
                 }
                 if (Test-Path -LiteralPath 'Assets' -PathType 'Container') {
                     Move-Item -LiteralPath 'Assets\' -Destination 'HM-Update\UpBackup\' -ErrorAction Stop
@@ -644,24 +686,27 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
                 Write-Host "Someting went wrong. But you can manually restore previous files from `"HM-Update\UpBackup`" until you start another update."
                 Exit 2
             }
-            $now = [DateTimeOffset]::('now').ToLocalTime().toString('yyyyMMdd_HHmmss')
-            Write-Host 'Compressing Backup ... ' -NoNewline
+            $nowString = [DateTimeOffset]::('now').ToLocalTime().toString('yyyyMMdd_HHmmss')
+            
             try {
                 if (Get-7zip) {
+                    $ext = '7z'
+                    Write-Host "Compressing `".\HM-Update\Backup_$nowString.$ext`" ... " -NoNewline
                     @(
                         [PSCustomObject]@{
                             # Use fast compression for .pdb or this takes ages.
-                            Path        = '.\HM-Update\UpBackup\*.pdb'
-                            Type        = 'Fast'
+                            Path = '.\HM-Update\UpBackup\*.pdb'
+                            Type = 'Fast'
                         },
                         # Use default (binary) for everything else.
                         '.\HM-Update\UpBackup\*'
-                    ) | Compress-7z -ArchivePath "HM-Update\Backup_$now.7z" -ProgressAction 'Continue' -ErrorAction Stop
-                    $ext = "7z"
+                    ) | Compress-7z -ArchivePath "HM-Update\Backup_$nowString.$ext" -ProgressAction 'Continue' -ErrorAction Stop
+                    
                 }
                 else {
-                    Compress-Archive '.\HM-Update\UpBackup\*' "HM-Update\Backup_$now.zip" -ErrorAction Stop
-                    $ext = "zip"
+                    $ext = 'zip'
+                    Write-Host "Compressing `".\HM-Update\Backup_$nowString.$ext`" ... " -NoNewline
+                    Compress-Archive '.\HM-Update\UpBackup\*' "HM-Update\Backup_$nowString.$ext" -ErrorAction Stop
                 }
                 Remove-Item -Recurse -Force 'HM-Update\UpBackup\'
                 Write-Host 'Done!' -ForegroundColor 'Green'
@@ -669,15 +714,19 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             catch {
                 Write-Host 'Error!' -ForegroundColor 'Red' 
                 Write-Error $_
-                Write-Host 'Someting went wrong while packing a backup. But you can still restore previous files from `"HM-Update\UpBackup`" until you start another update.'
+                Write-Host 'Someting went wrong while packing a backup. But you can still restore previous files from `".\HM-Update\UpBackup`" until you start another update.'
                 $exitCode = 3
             }
 
             if (Test-Path 'HM-Update\update' -PathType Container) {
                 Remove-Item -Recurse -Force 'HM-Update\update\'
             }
-            Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from `"HM-Update\Backup_$now.$ext`"."
-            Write-Host 'Depending on the update you might need to manually regenerate your OTR/O2R!' -ForegroundColor 'Yellow' 
+            if (Test-Path 'HM-Update\update.zip' -PathType Leaf) {
+                Remove-Item -Force '.\HM-Update\update.zip'
+            }
+            Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from `".\HM-Update\Backup_$nowString.$ext`"."
+            Write-Host 'Depending on the update you might need to manually regenerate your OTR/O2R!' -ForegroundColor 'Yellow'
+            Pause
         }
         $ProgressPreference = $prevProg
         if ($exitCode -ne 0) {

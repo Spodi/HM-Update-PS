@@ -402,9 +402,11 @@ gamecontrollerdb.txt
 soh.otr
 update.zip
 readme.txt
+shipofharkinian.json
 Save/
 assets/
 mods/
 UpBackup/
 Update/
-HM-Update/
+HM-Update/*
+!HM-Update/GameSupport.json
