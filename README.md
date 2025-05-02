@@ -11,7 +11,7 @@ Uses working directory when not given.
 ### -Autostart
 Automatically starts the game after this script finishes. Except on errors.
 
-### -Version
+### -Version <String\>
 Force downloading the release with the given GitHub tag. Usually like "9.0.2" or "v1.0.0". Use "Nightly" for the latest Nightly build.
 Implies "-ForceUpdate" and "-SkipCheckTimer".
 
