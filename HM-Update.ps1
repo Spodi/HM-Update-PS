@@ -1,7 +1,7 @@
 <#
 .DESCRIPTION
 PowerShell script to update Harbour Masters ports.
-Gets update data and updtates the port in the scripts current working directory.
+Gets update data and updates the port in the scripts current working directory.
 
 .NOTES
 Exit Codes:
@@ -11,7 +11,7 @@ Exit Codes:
 3 - Failed to pack backup. Update was successful, but packed backup is incomplete. Manually save files from the "UpBackup" folder before next update.
 
 
-Harbour Masters Update - PowerShell Script v25.04.26
+Harbour Masters Update - PowerShell Script v25.05.02
     
     MIT License
 
@@ -34,18 +34,55 @@ Harbour Masters Update - PowerShell Script v25.04.26
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
+
+.EXAMPLE
+.\HM-Update.ps1 -AutoUpdate -RegenAssetArchive -DeleteRando
+Do an unattended update that deletes asset archives and Randomizer saves (saves will be backed up).
+.EXAMPLE
+.\HM-Update.ps1 -AutoUpdate -RegenAssetArchive:$false -DeleteRando:$false
+Do an unattended update that keeps asset archives Randomizer saves (saves will still be backed up).
+.Example
+.\HM-Update.ps1 -Version "Nightly"
+Update to the latest Nightly.
+.EXAMPLE
+.\HM-Update.ps1 -ForceGame 'Ship of Harkinian'
+Download and unpack the latest release of Ship of Harkinian. Best to only use this in an empty folder.
 #>
 
 [CmdletBinding(DefaultParameterSetName = 'Default')]
 param (
+    <#
+    Update the port found in this path.
+    Uses working directory when not given.
+    #>
+    [Parameter(ParameterSetName = 'Default')] [string[]]$Path,
+
     # Automatically starts the game after this script finishes. Except on errors.
     [Parameter(ParameterSetName = 'Default')] [switch]$Autostart,
 
     <#
-    Force an update to the latest nightly version.
+    Force downloading the release with the given GitHub tag. Usually like "9.0.2" or "v1.0.0". Use "Nightly" for the latest Nightly build.
     Implies "-ForceUpdate" and "-SkipCheckTimer".
     #>
-    [Parameter(ParameterSetName = 'Default')] [switch]$Nightly,
+    [Parameter(ParameterSetName = 'Default')] [string]$Version,
+
+    <#
+    Assume "yes" for updating without asking.
+    Also set -RegenAssetArchive or -RegenAssetArchive:$false and -DeleteRando or -DeleteRando:$false for an unattended update.
+    #>
+    [Parameter(ParameterSetName = 'Default')] [switch]$AutoUpdate,
+
+    <#
+    Assume "yes" for deleting asset archives without asking. Use -RegenAssetArchive:$false to assume "no".
+    Also set -AutoUpdate and -DeleteRando or -DeleteRando:$false for an unattended update.
+    #>
+    [Parameter(ParameterSetName = 'Default')] [switch]$RegenAssetArchive,
+
+    <#
+    Assume "yes" for deleting Randomizer saves without asking. Use -DeleteRando:$false to assume "no".
+    Also set -AutoUpdate and -RegenAssetArchive or -RegenAssetArchive:$false for an unattended update.
+    #>
+    [Parameter(ParameterSetName = 'Default')] [switch]$DeleteRando,
 
     # Check for updates more often than once per hour.
     [Parameter(ParameterSetName = 'Default')] [switch]$SkipCheckTimer,
@@ -63,9 +100,6 @@ param (
     > -ForceGame can corrupt your game if you select a different game than the one already installed!
     #>
     [Parameter(ParameterSetName = 'Default')] [string]$ForceGame
-
-
-    
 )
 
 #region Functions
@@ -434,33 +468,40 @@ function Invoke-GitHubRestRequest {
 #region Script
 class UpdateConfig {
     [DateTimeOffset]$LastCheck = [DateTimeOffset]::('now').AddHours(-1)
-    [PSCustomObject]$GH_Rates
 }
 class GameEntry {
     [String]$Name
-    [String]$Exe
+    [System.IO.FileInfo]$Exe
     [String]$Owner
     [String]$Repo
     [String]$Nightly
-    [String]$Config
-    [String[]]$Save
+    [System.IO.FileInfo]$Config
+    [System.IO.FileInfo[]]$Save
+    [System.IO.FileInfo[]]$AssetArchives
+}
+class UpdateDatabase {
+    [GameEntry[]]$Games
+    [PSCustomObject]$GH_Rates
 }
 
 $exitCode = 0
 $UpdateConfig = [UpdateConfig]::new()
+
+$DatabasePath = Join-Path $PSScriptRoot '.\UpdateDatabase.json'
+
 if (Test-Path -LiteralPath '.\HM-Update\config.json' -PathType Leaf) {
     [UpdateConfig]$UpdateConfig = Get-Content '.\HM-Update\config.json' | ConvertFrom-Json
 }
 if (!(Test-Path 'HM-Update' -PathType Container)) {
     [void](New-Item -ItemType Directory 'HM-Update')
 }
-$GameSupport = @([GameEntry]::new())
-if (Test-Path -LiteralPath '.\HM-Update\GameSupport.json' -PathType Leaf) {
-    [GameEntry[]]$GameSupport = Get-Content '.\HM-Update\GameSupport.json' | ConvertFrom-Json
+$UpdateDatabase = [UpdateDatabase]::new()
+if (Test-Path -LiteralPath $DataBasePath -PathType Leaf) {
+    [UpdateDatabase]$UpdateDatabase = Get-Content $DataBasePath | ConvertFrom-Json
 }
 
 if ($forceGame) {
-    if ($GameSupport.Name -contains $forceGame) {
+    if ($UpdateDatabase.Games.Name -contains $forceGame) {
         $GameInfo = [PSCustomObject]@{
             ProductName       = $forceGame
             ProductVersion    = '0.0.0'
@@ -468,20 +509,20 @@ if ($forceGame) {
         }
     }
     else {
-        $text = "`"$forceGame`" is not supported. Supported games: '$($GameSupport.Name -join "', '")'"
+        $text = "`"$forceGame`" is not supported. Supported games: '$($UpdateDatabase.Games.Name -join "', '")'"
         Throw $text
     }
    
 }
 else {
-    foreach ($exe in $GameSupport.Exe) {
-        if (Test-Path -LiteralPath $exe -PathType Leaf) {
-            $GameInfo = (Get-Item $exe).VersionInfo
+    foreach ($exe in $UpdateDatabase.Games.Exe) {
+        if ($exe.Exists) {
+            $GameInfo = $exe.VersionInfo
             break;
         }  
     }
     if (!$GameInfo) {
-        Write-Error "Could not find a compatible game! Try -forceGame <'$($GameSupport.Name -join "' | '")'>"
+        Write-Error "Could not find a compatible game! Try -forceGame <'$($UpdateDatabase.Games.Name -join "' | '")'>"
         Exit 1
     } 
 }
@@ -499,33 +540,42 @@ else {
     $UpdateConfig | ConvertTo-Json | Out-File 'HM-Update\config.json'
 }
 
-$UpdateContext = $GameSupport | Where-Object 'Name' -EQ $GameInfo.ProductName
+$UpdateContext = $UpdateDatabase.Games | Where-Object 'Name' -EQ $GameInfo.ProductName
 
 Write-Host "Game:           $($GameInfo.ProductName)"
 Write-Host "Local Version:  $($GameInfo.ProductVersion)"
 
 $RemoteVersion = $null
 $now = [DateTimeOffset]::('now')
-if ($nightly) {
-    $RemoteVersion = 'Nightly'
-    $Download = [PSCustomObject]@{
-        URL = $UpdateContext.Nightly
+
+if ($Version) {
+    if ($Version -eq 'Nightly') {
+        $RemoteVersion = 'Nightly'
+        $Download = [PSCustomObject]@{
+            URL = $UpdateContext.Nightly
+        }
+    }
+    else {
+        $Request = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $UpdateContext.Owner + '/' + $UpdateContext.Repo + '/releases/tags/' + $Version) -Rates $UpdateDatabase.GH_Rates
     }
 }
 elseif (($now -gt $UpdateConfig.LastCheck.AddHours(1)) -or $forceUpdate -or $forceGame -or $SkipCheckTimer) {
-    $Request = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $UpdateContext.Owner + '/' + $UpdateContext.Repo + '/releases/latest') -Rates $UpdateConfig.GH_Rates
-    $ReleaseInfo = $Request.Response
-    $UpdateConfig.GH_Rates = $Request.GH_Rates
-    $UpdateConfig.LastCheck = $now
-    $UpdateConfig | ConvertTo-Json | Out-File 'HM-Update\config.json'
+    $Request = Invoke-GitHubRestRequest -Uri ('https://api.github.com/repos/' + $UpdateContext.Owner + '/' + $UpdateContext.Repo + '/releases/latest') -Rates $UpdateDatabase.GH_Rates
+}
 
-    if (!$ReleaseInfo) {
-        Write-Error 'Could not get required information from GitHub.'
-        Exit 1
-    }
+$ReleaseInfo = $Request.Response
+$UpdateDatabase.GH_Rates = $Request.GH_Rates
+$UpdateConfig.LastCheck = $now
+$UpdateConfig | ConvertTo-Json | Out-File 'HM-Update\config.json'
+$UpdateDatabase | ConvertTo-Json | Out-File $DatabasePath
+
+if (!$ReleaseInfo -and (($now -gt $UpdateConfig.LastCheck.AddHours(1)) -or $forceUpdate -or $forceGame -or $SkipCheckTimer)) {
+    Write-Error 'Could not get required information from GitHub. (Wrong release tag?)'
+    Exit 1
+}
     
-    # Try to convert into a Version number
-    
+# Try to convert into a Version number
+if ($RemoteVersion -and $RemoteVersion -ne 'Nightly') {
     $RemoteVersion = $ReleaseInfo.tag_name
     $Download = $ReleaseInfo.Assets | & { Process {
             if ($_.name -match 'Win64' -or $_.name -match 'Windows') {
@@ -536,10 +586,9 @@ elseif (($now -gt $UpdateConfig.LastCheck.AddHours(1)) -or $forceUpdate -or $for
     
         } }
     
-    
-     
     $RemoteVersion = [version]($RemoteVersion -replace '^v ?', '')
 }
+
 if ($RemoteVersion) {
     Write-Host "Remote Version: $($RemoteVersion)"
 }
@@ -551,7 +600,7 @@ Write-Host ''
 
 #region Rando saves
 $save = $null
-if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGame -or $nightly) {
+if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGame -or $Version) {
     Write-Host 'There is a newer version available!' -ForegroundColor 'Blue'
     Write-Host "Download URL: $($Download.URL)"
 
@@ -602,8 +651,8 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
         }
     }
     #endregion Rando saves
-
     Write-Host 'Updating overwrites your current version, but there will be a backup (including saves and settings).' -ForegroundColor 'DarkYellow'
+    Write-Host 'Depending on the update you might need to regenerate your OTR/O2R!' -ForegroundColor 'DarkYellow'
     if ($IsRando) {
         Write-Host 'WARNING: Randomizer save detected:' -ForegroundColor 'yellow'
         Write-Host (($IsRando | Format-Table | Out-String).Trim())
@@ -616,6 +665,31 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
     } until ($answer -eq 'y' -or $answer -eq 'n')
 
     if ($answer -eq 'y') {
+        if ($PSBoundParameters.Key -notcontains 'RegenAssetArchive') {
+            Write-Host 'Delete asset archive (otr/o2r) after the patch to regenerate? (y/n)' -NoNewline
+            do {
+                $answer = Read-Host ' '
+            } until ($answer -eq 'y' -or $answer -eq 'n')
+            if ($answer -eq 'y') {
+                $RegenAssetArchive = $true
+            }
+            else {
+                $RegenAssetArchive = $false
+            }
+        }
+        if ($IsRando -and $PSBoundParameters.Key -notcontains 'DeleteRando') {
+            Write-Host 'Delete all Randomizer saves after updating? (y/n)' -NoNewline
+            do {
+                $answer = Read-Host ' '
+            } until ($answer -eq 'y' -or $answer -eq 'n')
+            if ($answer -eq 'y') {
+                $DeleteRando = $true
+            }
+            else {
+                $DeleteRando = $false
+            }
+        }
+
         Write-Host "Downloading `"$($Download.URL)`"... " -NoNewline
         $prevProg = $ProgressPreference
         $ProgressPreference = 'SilentlyContinue'
@@ -662,11 +736,11 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             try {
                 [void](New-Item -ItemType Directory 'HM-Update\UpBackup')
                 foreach ($save in $UpdateContext.Save) {
-                    if (Test-Path -LiteralPath $save) {
+                    if ($UpdateContext.Save.Exists) {
                         Copy-Item -LiteralPath $save -Destination 'HM-Update\UpBackup\' -Recurse -ErrorAction Stop
                     }
                 }
-                if (Test-Path -LiteralPath $UpdateContext.Config -PathType 'Leaf') {
+                if ($UpdateContext.Config.exists) {
                     Copy-Item -LiteralPath $UpdateContext.Config -Destination 'HM-Update\UpBackup\' -ErrorAction Stop
                 }
                 if (Test-Path -LiteralPath 'Assets' -PathType 'Container') {
@@ -725,8 +799,6 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
                 Remove-Item -Force '.\HM-Update\update.zip'
             }
             Write-Host "Update finnished. If something doesn't work like expected, you can manually restore previous files from `".\HM-Update\Backup_$nowString.$ext`"."
-            Write-Host 'Depending on the update you might need to manually regenerate your OTR/O2R!' -ForegroundColor 'Yellow'
-            Pause
         }
         $ProgressPreference = $prevProg
         if ($exitCode -ne 0) {

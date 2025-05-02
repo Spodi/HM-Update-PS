@@ -1,7 +1,7 @@
 # HM-Update-PS
 ## DESCRIPTION
 PowerShell script to update Harbour Masters ports.
-Gets update data and updtates the port in the scripts current working directory.
+Gets update data and updates the port in the scripts current working directory.
 
 ## PARAMETER
 ### -Autostart
