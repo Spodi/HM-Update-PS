@@ -575,7 +575,7 @@ if (!$ReleaseInfo -and (($now -gt $UpdateConfig.LastCheck.AddHours(1)) -or $forc
 }
     
 # Try to convert into a Version number
-if ($RemoteVersion -and $RemoteVersion -ne 'Nightly') {
+if ($RemoteVersion -ne 'Nightly') {
     $RemoteVersion = $ReleaseInfo.tag_name
     $Download = $ReleaseInfo.Assets | & { Process {
             if ($_.name -match 'Win64' -or $_.name -match 'Windows') {
