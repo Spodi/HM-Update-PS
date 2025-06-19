@@ -11,7 +11,7 @@ Exit Codes:
 3 - Failed to pack backup. Update was successful, but packed backup is incomplete. Manually save files from the "UpBackup" folder before next update.
 
 
-Harbour Masters Update - PowerShell Script v25.05.02
+Harbour Masters Update - PowerShell Script v25.06.19
     
     MIT License
 
