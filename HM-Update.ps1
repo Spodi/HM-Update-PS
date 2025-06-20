@@ -11,7 +11,7 @@ Exit Codes:
 3 - Failed to pack backup. Update was successful, but packed backup is incomplete. Manually save files from the "UpBackup" folder before next update.
 
 
-Harbour Masters Update - PowerShell Script v25.06.19
+Harbour Masters Update - PowerShell Script v25.06.20
     
     MIT License
 
@@ -790,6 +790,40 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
                 Write-Error $_
                 Write-Host 'Someting went wrong while packing a backup. But you can still restore previous files from `".\HM-Update\UpBackup`" until you start another update.'
                 $exitCode = 3
+            }
+            if ($IsRando -and $DeleteRando) {
+                Write-Host 'Deleting Randomizer saves ... ' -NoNewline
+                $DelError = $false
+                $IsRando | & { Process {
+                        try {
+                            Remove-Item -LiteralPath $_.Name -Force -ErrorAction Stop
+                        }
+                        catch {
+                            $DelError = $true
+                        }  
+                    } }
+                Write-Host 'Done!' -ForegroundColor 'Green'
+                if ($DelError) {
+                    Write-Host 'Error!' -ForegroundColor 'Red'
+                    Write-Host 'Someting went wrong while deleting Randomizer saves.'
+                }
+            }
+            if ($RegenAssetArchive) {
+                Write-Host 'Deleting asset archives ... ' -NoNewline
+                $DelError = $false
+                $UpdateContext.AssetArchives | & { Process {
+                        try {
+                            Remove-Item -LiteralPath $_.Name -Force -ErrorAction Stop
+                        }
+                        catch {
+                            $DelError = $true
+                        }  
+                    } }
+                Write-Host 'Done!' -ForegroundColor 'Green'
+                if ($DelError) {
+                    Write-Host 'Error!' -ForegroundColor 'Red'
+                    Write-Host 'Someting went wrong while deleting asset archives.'
+                }
             }
 
             if (Test-Path 'HM-Update\update' -PathType Container) {
