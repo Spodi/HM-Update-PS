@@ -11,7 +11,7 @@ Exit Codes:
 3 - Failed to pack backup. Update was successful, but packed backup is incomplete. Manually save files from the "UpBackup" folder before next update.
 
 
-Harbour Masters Update - PowerShell Script v25.06.20
+Harbour Masters Update - PowerShell Script v25.07.23
     
     MIT License
 
@@ -793,13 +793,13 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             }
             if ($IsRando -and $DeleteRando) {
                 Write-Host 'Deleting Randomizer saves ... ' -NoNewline
-                $DelError = $false
+                $Script:DelError = $false
                 $IsRando | & { Process {
                         try {
                             Remove-Item -LiteralPath $_.Name -Force -ErrorAction Stop
                         }
                         catch {
-                            $DelError = $true
+                            $Script:DelError = $true
                         }  
                     } }
                 Write-Host 'Done!' -ForegroundColor 'Green'
@@ -810,13 +810,13 @@ if ($RemoteVersion -gt $GameInfo.ProductVersionRaw -or $forceUpdate -or $forceGa
             }
             if ($RegenAssetArchive) {
                 Write-Host 'Deleting asset archives ... ' -NoNewline
-                $DelError = $false
+                $Script:DelError = $false
                 $UpdateContext.AssetArchives | & { Process {
                         try {
                             Remove-Item -LiteralPath $_.Name -Force -ErrorAction Stop
                         }
                         catch {
-                            $DelError = $true
+                            $Script:DelError = $true
                         }  
                     } }
                 Write-Host 'Done!' -ForegroundColor 'Green'
